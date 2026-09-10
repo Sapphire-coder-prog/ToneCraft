@@ -5,7 +5,7 @@
 
 const CONFIG = {
     
-    BACKEND_URL: "http://127.0.0.1:8000",
+    BACKEND_URL: "https://tonecraft-backend.onrender.com",
 
     
     CLERK_PUBLISHABLE_KEY: "pk_test_bW9yZS1ncm91c2UtODYzOS5jbGVyay5hY2NvdW50cy5kZXYk",
