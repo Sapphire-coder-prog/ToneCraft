@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rehearsal — Tonecraft</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@400;500;600&display=swap"
+        rel="stylesheet" />
+</head>
+
+<body>
+
+    <header class="navbar">
+        <a href="index.html" class="logo">TONECRAFT</a>
+        <div id="user-button"></div>
+    </header>
+
+    <main class="rehearsal-main">
+
+        <!-- STEP 1: script setup -->
+        <section id="setup-section" class="setup-section">
+            <h2 class="reveal-text">New rehearsal</h2>
+            <label for="title-input">Title</label>
+            <input id="title-input" type="text" placeholder="The Confrontation" />
+
+            <label for="script-input">Script (one line per row)</label>
+            <textarea id="script-input" rows="8" placeholder="I cannot believe you did this.
+You promised me you wouldn't leave.
+And now you're standing here..."></textarea>
+
+            <button id="analyse-btn" class="btn btn-primary">Analyse script →</button>
+            <p id="setup-error" class="error-text"></p>
+        </section>
+
+        <!-- STEP 2: workspace, one line at a time -->
+        <section id="workspace-section" class="workspace-section hidden">
+            <div class="line-counter" id="line-counter">LINE 1 / 1</div>
+
+            <div class="tone-select-row">
+                <label for="tone-select">Tone</label>
+                <select id="tone-select">
+                    <option value="neutral">Neutral</option>
+                    <option value="grief">Grief</option>
+                    <option value="sarcasm">Sarcasm</option>
+                    <option value="urgency">Urgency</option>
+                    <option value="tender">Tender</option>
+                    <option value="commanding">Commanding</option>
+                </select>
+            </div>
+
+            <blockquote id="line-text" class="line-text"></blockquote>
+
+            <!-- Reference performance -->
+            <div class="reference-block">
+                <button id="generate-btn" class="btn btn-secondary">Hear reference</button>
+                <div id="reference-player" class="audio-player hidden">
+                    <button id="ref-play-btn" class="play-btn">▶</button>
+                    <div class="waveform" id="ref-waveform">
+                        <span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span>
+                        <span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span>
+                        <span class="wave-bar"></span><span class="wave-bar"></span>
+                    </div>
+                    <audio id="ref-audio"></audio>
+                </div>
+                <p id="generate-status" class="status-text"></p>
+            </div>
+
+            <!-- Recording -->
+            <div class="recording-block">
+                <div id="record-controls">
+                    <button id="record-btn" class="btn btn-secondary">Start recording</button>
+                    <span id="record-timer" class="record-timer hidden">00:00</span>
+                </div>
+
+                <div id="playback-controls" class="hidden">
+                    <audio id="user-audio" controls></audio>
+                    <button id="retry-btn" class="btn btn-ghost">Try again</button>
+                    <button id="submit-recording-btn" class="btn btn-primary">Submit recording</button>
+                </div>
+                <p id="record-status" class="status-text"></p>
+            </div>
+
+            <!-- Feedback -->
+            <div id="feedback-block" class="feedback-block hidden">
+                <h3>Your performance</h3>
+                <p id="feedback-comparison" class="feedback-comparison"></p>
+                <div class="feedback-metrics">
+                    <div class="metric-col">
+                        <span class="metric-label">Reference</span>
+                        <span id="ref-tempo" class="metric-value"></span>
+                        <span id="ref-pauses" class="metric-sub"></span>
+                    </div>
+                    <div class="metric-col">
+                        <span class="metric-label">You</span>
+                        <span id="user-tempo" class="metric-value"></span>
+                        <span id="user-pauses" class="metric-sub"></span>
+                    </div>
+                </div>
+                <button id="try-again-line-btn" class="btn btn-ghost">Record again</button>
+            </div>
+
+            <div class="line-nav">
+                <button id="prev-line-btn" class="btn btn-ghost">← Previous</button>
+                <button id="next-line-btn" class="btn btn-ghost">Next →</button>
+            </div>
+        </section>
+
+    </main>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
+    <script src="config.js"></script>
+    <script src="auth.js"></script>
+    <script src="api.js"></script>
+    <script src="app.js"></script>
+    <script>
+        // ==== Page state ====
+        let currentScriptId = null;
+        let currentTitle = "";
+        let lines = [];          // [{line_id, text, tone, audio_url, recordingBlob, uploaded, compareResult}]
+        let currentIndex = 0;
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let recordTimerInterval = null;
+        let stopWaveform = null;
+
+        async function init() {
+            await initAuth();
+            await requireAuthOrRedirect();
+            await mountUserButton("user-button");
+            attachButtonMicroInteractions();
+
+            const params = new URLSearchParams(window.location.search);
+            const scriptIdFromUrl = params.get("script");
+            if (scriptIdFromUrl) {
+                const cached = rehearsalCache.get(scriptIdFromUrl);
+                if (cached) {
+                    currentScriptId = cached.scriptId;
+                    currentTitle = cached.title;
+                    lines = cached.lines;
+                    showWorkspace();
+                    return;
+                }
+            }
+            staggerReveal(".reveal-text");
+        }
+
+        // ---- Step 1: create script ----
+        document.getElementById("analyse-btn").addEventListener("click", async () => {
+            const title = document.getElementById("title-input").value.trim() || "Untitled rehearsal";
+            const text = document.getElementById("script-input").value.trim();
+            const errorEl = document.getElementById("setup-error");
+            errorEl.textContent = "";
+
+            if (!text) {
+                errorEl.textContent = "Paste a script first.";
+                return;
+            }
+
+            const btn = document.getElementById("analyse-btn");
+            btn.disabled = true;
+            btn.textContent = "Analysing...";
+
+            try {
+                const result = await api.createScript(text);
+                currentScriptId = result.script_id;
+                currentTitle = title;
+                lines = result.lines.map((l) => ({
+                    line_id: l.line_id,
+                    text: l.text,
+                    tone: "neutral",
+                    audio_url: null,
+                    recordingBlob: null,
+                    uploaded: false,
+                    compareResult: null,
+                }));
+                rehearsalCache.save(currentScriptId, currentTitle, lines);
+                showWorkspace();
+            } catch (e) {
+                errorEl.textContent = e.message;
+                showToast(e.message, "error");
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "Analyse script →";
+            }
+        });
+
+        // ---- Show workspace, render current line ----
+        function showWorkspace() {
+            document.getElementById("setup-section").classList.add("hidden");
+            document.getElementById("workspace-section").classList.remove("hidden");
+            currentIndex = 0;
+            renderLine();
+        }
+
+        function renderLine() {
+            const line = lines[currentIndex];
+            document.getElementById("line-counter").textContent =
+                `LINE ${currentIndex + 1} / ${lines.length}`;
+            document.getElementById("line-text").textContent = `"${line.text}"`;
+            document.getElementById("tone-select").value = line.tone;
+
+            // reset reference UI
+            document.getElementById("reference-player").classList.add("hidden");
+            document.getElementById("generate-status").textContent = line.audio_url
+                ? "Reference ready."
+                : "";
+            document.getElementById("ref-audio").src = line.audio_url
+                ? api.audioUrl(line.audio_url)
+                : "";
+            if (line.audio_url) {
+                document.getElementById("reference-player").classList.remove("hidden");
+            }
+
+            // reset recording UI
+            document.getElementById("record-controls").classList.remove("hidden");
+            document.getElementById("playback-controls").classList.add("hidden");
+            document.getElementById("record-status").textContent = "";
+            document.getElementById("record-timer").classList.add("hidden");
+
+            // reset feedback UI
+            const feedbackBlock = document.getElementById("feedback-block");
+            if (line.compareResult) {
+                renderFeedback(line.compareResult);
+                feedbackBlock.classList.remove("hidden");
+            } else {
+                feedbackBlock.classList.add("hidden");
+            }
+
+            document.getElementById("prev-line-btn").disabled = currentIndex === 0;
+            document.getElementById("next-line-btn").disabled = currentIndex === lines.length - 1;
+        }
+
+        // ---- Tone ----
+        document.getElementById("tone-select").addEventListener("change", async (e) => {
+            const line = lines[currentIndex];
+            const newTone = e.target.value;
+            try {
+                await api.setTone(line.line_id, newTone);
+                line.tone = newTone;
+                rehearsalCache.save(currentScriptId, currentTitle, lines);
+            } catch (err) {
+                showToast(err.message, "error");
+            }
+        });
+
+        // ---- Generate reference ----
+        document.getElementById("generate-btn").addEventListener("click", async () => {
+            const line = lines[currentIndex];
+            const statusEl = document.getElementById("generate-status");
+            statusEl.textContent = "Generating your reference performance...";
+
+            try {
+                const result = await api.generateReference(line.line_id);
+                line.audio_url = result.audio_url;
+                rehearsalCache.save(currentScriptId, currentTitle, lines);
+                document.getElementById("ref-audio").src = api.audioUrl(result.audio_url);
+                document.getElementById("reference-player").classList.remove("hidden");
+                statusEl.textContent = "Reference ready.";
+            } catch (err) {
+                statusEl.textContent = "Something went wrong. Please try again.";
+                showToast(err.message, "error");
+            }
+        });
+
+        document.getElementById("ref-play-btn").addEventListener("click", () => {
+            const audio = document.getElementById("ref-audio");
+            const waveform = document.getElementById("ref-waveform");
+            if (audio.paused) {
+                audio.play();
+                stopWaveform = startWaveform(waveform);
+                document.getElementById("ref-play-btn").textContent = "⏸";
+            } else {
+                audio.pause();
+                if (stopWaveform) stopWaveform();
+                document.getElementById("ref-play-btn").textContent = "▶";
+            }
+        });
+        document.getElementById("ref-audio").addEventListener("ended", () => {
+            if (stopWaveform) stopWaveform();
+            document.getElementById("ref-play-btn").textContent = "▶";
+        });
+
+        // ---- Recording ----
+        document.getElementById("record-btn").addEventListener("click", async () => {
+            const statusEl = document.getElementById("record-status");
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                recordedChunks = [];
+                mediaRecorder = new MediaRecorder(stream);
+
+                mediaRecorder.ondataavailable = (e) => {
+                    if (e.data.size > 0) recordedChunks.push(e.data);
+                };
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(recordedChunks, { type: "audio/webm" });
+                    lines[currentIndex].recordingBlob = blob;
+                    document.getElementById("user-audio").src = URL.createObjectURL(blob);
+                    document.getElementById("playback-controls").classList.remove("hidden");
+                    document.getElementById("record-controls").classList.add("hidden");
+                    stream.getTracks().forEach((t) => t.stop());
+                };
+
+                mediaRecorder.start();
+                statusEl.textContent = "Recording...";
+                document.getElementById("record-btn").textContent = "Stop";
+                document.getElementById("record-timer").classList.remove("hidden");
+                startRecordTimer();
+
+                // swap button behaviour to "stop" for this recording session
+                document.getElementById("record-btn").onclick = stopRecording;
+            } catch (err) {
+                statusEl.textContent =
+                    "Microphone access was blocked. Please allow microphone permission and try again.";
+            }
+        });
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== "inactive") {
+                mediaRecorder.stop();
+            }
+            clearInterval(recordTimerInterval);
+            document.getElementById("record-status").textContent = "";
+            // restore original click handler for next time
+            document.getElementById("record-btn").textContent = "Start recording";
+            document.getElementById("record-btn").onclick = null;
+            document.getElementById("record-btn").replaceWith(document.getElementById("record-btn").cloneNode(true));
+            rebindRecordButton();
+        }
+
+        function rebindRecordButton() {
+            document.getElementById("record-btn").addEventListener("click", () => {
+                document.getElementById("record-btn").click();
+            });
+        }
+
+        function startRecordTimer() {
+            let seconds = 0;
+            const timerEl = document.getElementById("record-timer");
+            timerEl.textContent = "00:00";
+            recordTimerInterval = setInterval(() => {
+                seconds++;
+                const m = String(Math.floor(seconds / 60)).padStart(2, "0");
+                const s = String(seconds % 60).padStart(2, "0");
+                timerEl.textContent = `${m}:${s}`;
+            }, 1000);
+        }
+
+        document.getElementById("retry-btn").addEventListener("click", () => {
+            lines[currentIndex].recordingBlob = null;
+            document.getElementById("playback-controls").classList.add("hidden");
+            document.getElementById("record-controls").classList.remove("hidden");
+            document.getElementById("record-timer").classList.add("hidden");
+        });
+
+        document.getElementById("submit-recording-btn").addEventListener("click", async () => {
+            const line = lines[currentIndex];
+            const statusEl = document.getElementById("record-status");
+            if (!line.recordingBlob) return;
+
+            statusEl.textContent = "Uploading your recording...";
+            try {
+                await api.uploadRecording(line.line_id, line.recordingBlob);
+                line.uploaded = true;
+                statusEl.textContent = "Analysing your performance...";
+
+                const result = await api.compare(line.line_id);
+                line.compareResult = result;
+                rehearsalCache.save(currentScriptId, currentTitle, lines);
+
+                renderFeedback(result);
+                document.getElementById("feedback-block").classList.remove("hidden");
+                statusEl.textContent = "";
+            } catch (err) {
+                statusEl.textContent = "Something went wrong. Please try again.";
+                showToast(err.message, "error");
+            }
+        });
+
+        function renderFeedback(result) {
+            document.getElementById("feedback-comparison").textContent = result.comparison;
+            document.getElementById("ref-tempo").textContent = `${result.reference.tempo_bpm} BPM`;
+            document.getElementById("ref-pauses").textContent = `${result.reference.pause_count} pauses`;
+            document.getElementById("user-tempo").textContent = `${result.user.tempo_bpm} BPM`;
+            document.getElementById("user-pauses").textContent = `${result.user.pause_count} pauses`;
+        }
+
+        document.getElementById("try-again-line-btn").addEventListener("click", () => {
+            const line = lines[currentIndex];
+            line.recordingBlob = null;
+            line.uploaded = false;
+            line.compareResult = null;
+            document.getElementById("feedback-block").classList.add("hidden");
+            document.getElementById("playback-controls").classList.add("hidden");
+            document.getElementById("record-controls").classList.remove("hidden");
+        });
+
+        // ---- Navigation ----
+        document.getElementById("prev-line-btn").addEventListener("click", () => {
+            if (currentIndex > 0) {
+                currentIndex--;
+                renderLine();
+            }
+        });
+        document.getElementById("next-line-btn").addEventListener("click", () => {
+            if (currentIndex < lines.length - 1) {
+                currentIndex++;
+                renderLine();
+            }
+        });
+
+        init();
+    </script>
+</body>
+
+</html>

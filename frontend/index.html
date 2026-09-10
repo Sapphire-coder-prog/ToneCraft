@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tonecraft — Say it like you mean it.</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@400;500;600&display=swap"
+        rel="stylesheet" />
+</head>
+
+<body>
+
+    <header class="navbar">
+        <div class="logo">TONECRAFT</div>
+        <div id="auth-area" class="auth-area">
+            <div id="user-button"></div>
+            <button id="sign-in-btn" class="btn btn-ghost">Sign in</button>
+        </div>
+    </header>
+
+    <main>
+        <section class="hero" id="particle-field">
+            <div class="hero-copy">
+                <h1 class="reveal-text">TONECRAFT</h1>
+                <p class="tagline reveal-text">Say it like you mean it.</p>
+                <p class="subtagline reveal-text">Turn a script into a performance.</p>
+                <button id="start-btn" class="btn btn-primary reveal-text">Start a new rehearsal</button>
+                <p id="status-line" class="status-line reveal-text"></p>
+            </div>
+        </section>
+
+        <section class="recent-section reveal" id="recent-section" style="display:none;">
+            <h2>Recent rehearsals</h2>
+            <div id="recent-list" class="recent-list"></div>
+        </section>
+
+        <!-- Modal for Clerk sign-in -->
+        <div id="signin-modal" class="modal hidden">
+            <div class="modal-backdrop" id="modal-backdrop"></div>
+            <div class="modal-content">
+                <div id="sign-in"></div>
+            </div>
+        </div>
+    </main>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
+    <script src="config.js"></script>
+    <script src="auth.js"></script>
+    <script src="api.js"></script>
+    <script src="app.js"></script>
+    <script>
+        async function init() {
+            initParticleField("particle-field");
+            staggerReveal(".reveal-text");
+            setupScrollReveals();
+            attachButtonMicroInteractions();
+
+            // Show backend/provider status quietly in the corner of the hero
+            try {
+                const status = await api.getStatus();
+                document.getElementById("status-line").textContent =
+                    `Powered by ${status.provider} · ${status.model}`;
+            } catch (e) {
+                document.getElementById("status-line").textContent = "Backend not reachable.";
+            }
+
+            await initAuth();
+            await refreshAuthUI();
+
+            window.Clerk.addListener(() => refreshAuthUI());
+        }
+
+        async function refreshAuthUI() {
+            const signedIn = isSignedIn();
+            document.getElementById("sign-in-btn").style.display = signedIn ? "none" : "inline-block";
+            document.getElementById("user-button").style.display = signedIn ? "inline-block" : "none";
+            if (signedIn) {
+                await mountUserButton("user-button");
+                showRecentRehearsals();
+            } else {
+                document.getElementById("recent-section").style.display = "none";
+            }
+        }
+
+        function showRecentRehearsals() {
+            const all = rehearsalCache.getAll();
+            const ids = Object.keys(all);
+            const section = document.getElementById("recent-section");
+            const list = document.getElementById("recent-list");
+            list.innerHTML = "";
+
+            if (!ids.length) {
+                section.style.display = "none";
+                return;
+            }
+
+            section.style.display = "block";
+            ids
+                .sort((a, b) => all[b].savedAt - all[a].savedAt)
+                .forEach((id) => {
+                    const r = all[id];
+                    const card = document.createElement("a");
+                    card.className = "recent-card";
+                    card.href = `rehearsal.html?script=${id}`;
+                    card.innerHTML = `<span class="recent-title">${r.title}</span>
+                             <span class="recent-meta">${r.lines.length} lines</span>`;
+                    list.appendChild(card);
+                });
+        }
+
+        document.getElementById("sign-in-btn").addEventListener("click", async () => {
+            const modal = document.getElementById("signin-modal");
+            modal.classList.remove("hidden");
+            await mountSignIn("sign-in");
+        });
+        document.getElementById("modal-backdrop").addEventListener("click", () => {
+            document.getElementById("signin-modal").classList.add("hidden");
+        });
+
+        document.getElementById("start-btn").addEventListener("click", async () => {
+            await initAuth(); // guard against a click before init() has finished
+            if (!isSignedIn()) {
+                document.getElementById("signin-modal").classList.remove("hidden");
+                await mountSignIn("sign-in");
+                return;
+            }
+            window.location.href = "rehearsal.html";
+        });
+
+        init();
+    </script>
+</body>
+
+</html>
