@@ -64,6 +64,7 @@ def status():
         "speaker": RIME_SPEAKER,
         "endpoint": RIME_ENDPOINT,
         "api_key_loaded": bool(RIME_API_KEY),
+        "clerk_jwks_loaded": bool(os.getenv("CLERK_JWKS_URL")),
     }
 
 
